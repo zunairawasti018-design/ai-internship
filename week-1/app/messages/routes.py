@@ -1,6 +1,10 @@
+import os
+import logging
 from typing import AsyncGenerator
 
+from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from groq import Groq
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
@@ -14,6 +18,48 @@ from app.schemas import (
     MessageResponse,
     MessageListResponse,
 )
+
+
+load_dotenv(override=True)
+
+logger = logging.getLogger(__name__)
+
+
+def generate_assistant_reply(prompt: str) -> str:
+    """Generate a reply using Groq if configured, otherwise return a sensible fallback."""
+    api_key = os.getenv("GROQ_API_KEY")
+    model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
+    if not api_key:
+        return (
+            "I’m ready to help, but the live Groq model isn’t configured yet. "
+            "Add GROQ_API_KEY in the backend environment to enable AI replies."
+        )
+
+    try:
+        client = Groq(api_key=api_key)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant for a chat application. Keep answers concise, useful, and markdown-friendly.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.7,
+            max_tokens=512,
+        )
+        reply = completion.choices[0].message.content
+        if reply and reply.strip():
+            return reply.strip()
+    except Exception as e:
+        logger.error("Groq API call failed: %s", e, exc_info=True)
+
+    return (
+        "I received your message, but Groq is unavailable right now. "
+        "Please check the GROQ_API_KEY and model configuration in the backend."
+    )
 
 
 router = APIRouter(
@@ -68,9 +114,24 @@ async def create_message(
         session_id=session_id,
     )
 
+    assistant_reply = ""
+    if message_data.role == "user":
+        assistant_reply = generate_assistant_reply(message_data.content)
+
+    db_assistant_message = Message(
+        content=assistant_reply,
+        role="assistant",
+        session_id=session_id,
+    ) if assistant_reply else None
+
     db.add(db_message)
+    if db_assistant_message is not None:
+        db.add(db_assistant_message)
+
     await db.commit()
     await db.refresh(db_message)
+    if db_assistant_message is not None:
+        await db.refresh(db_assistant_message)
 
     return MessageResponse.model_validate(db_message)
 
@@ -84,7 +145,7 @@ async def list_messages(
     session_id: int,
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(50, ge=1, le=100, description="Number of records to retrieve"),
-    role: str | None = Query(None, regex="^(user|assistant|system)$", description="Filter by message role"),
+    role: str | None = Query(None, pattern="^(user|assistant|system)$", description="Filter by message role"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> MessageListResponse:

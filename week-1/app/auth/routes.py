@@ -1,13 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
 
 from app.auth.security import hash_password, verify_password
 from app.auth.jwt import create_access_token, SECRET_KEY, ALGORITHM
 from app.database import AsyncSessionLocal
+from app.dependencies import get_current_user as get_authenticated_user
 from app.models.user import User
 
 
@@ -36,16 +38,33 @@ async def register(
     user: RegisterRequest,
     db: AsyncSession = Depends(get_db)
 ):
+    email = user.email.strip().lower()
+    existing_user = await db.scalar(select(User).where(User.email == email))
+
+    if existing_user:
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists",
+        )
+
     hashed_password = hash_password(user.password)
 
     new_user = User(
         name=user.name,
-        email=user.email,
+        email=email,
         hashed_password=hashed_password
     )
 
     db.add(new_user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="An account with this email already exists",
+        )
+
     await db.refresh(new_user)
 
     return {
@@ -65,6 +84,7 @@ oauth2_scheme = OAuth2PasswordBearer(
 # Login
 @router.post("/login")
 async def login(
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db)
 ):
@@ -135,4 +155,13 @@ async def protected_route(
     return {
         "message": "You are authenticated",
         "user_id": current_user
+    }
+
+
+@router.get("/me")
+async def current_user_profile(current_user: User = Depends(get_authenticated_user)):
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
     }

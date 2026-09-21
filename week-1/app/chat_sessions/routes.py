@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 
 from app.dependencies import get_db, get_current_user
 from app.models.chat_session import ChatSession
+from app.models.message import Message
 from app.models.user import User
 from app.schemas import (
     ChatSessionCreate,
@@ -273,5 +274,6 @@ async def delete_chat_session(
             detail="You do not have permission to delete this session",
         )
 
-    await db.delete(db_session)
+    await db.execute(delete(Message).where(Message.session_id == session_id))
+    await db.execute(delete(ChatSession).where(ChatSession.id == session_id))
     await db.commit()
