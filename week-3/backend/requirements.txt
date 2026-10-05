@@ -1,0 +1,21 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+aiosqlite
+alembic
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+groq
+python-dotenv
+aiofiles
+
+# Qdrant vector store
+qdrant-client[fastembed]
+
+# Embedding model (all-MiniLM-L6-v2, ~90 MB)
+sentence-transformers
+
+# PDF text extraction
+pypdf
